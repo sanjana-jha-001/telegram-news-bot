@@ -2,7 +2,3 @@ requests
 gspread
 google-auth
 flask
-<<<<<<< HEAD
-
-=======
->>>>>>> 15b01fe4e04fe06940abb7fa4be1d4260fac88f0
