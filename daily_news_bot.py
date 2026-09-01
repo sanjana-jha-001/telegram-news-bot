@@ -159,18 +159,33 @@ def send_to_all_subscribers(message: str):
 
     print(f"Sending news to {len(subscribers)} subscriber(s)...")
 
-    # Telegram has a 4096 character limit per message; split if needed.
-    MAX_LEN = 4000
-    chunks = (
-        [message]
-        if len(message) <= MAX_LEN
-        else [message[i : i + MAX_LEN] for i in range(0, len(message), MAX_LEN)]
-    )
+    chunks = split_message_by_lines(message)
 
     for chat_id in subscribers:
         for chunk in chunks:
             send_telegram_message(chat_id, chunk)
         time.sleep(0.3)  # small delay to avoid hitting Telegram's rate limits
+
+
+def split_message_by_lines(message: str, max_len: int = 3500):
+    """Split a long message into chunks WITHOUT breaking in the middle of a
+    line (so markdown links like [text](url) never get cut in half)."""
+    lines = message.split("\n")
+    chunks = []
+    current = ""
+
+    for line in lines:
+        # +1 accounts for the newline that will join this line to current
+        if len(current) + len(line) + 1 > max_len and current:
+            chunks.append(current)
+            current = line
+        else:
+            current = f"{current}\n{line}" if current else line
+
+    if current:
+        chunks.append(current)
+
+    return chunks
 
 
 def main():
