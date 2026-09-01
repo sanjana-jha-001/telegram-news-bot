@@ -41,7 +41,7 @@ SCOPES = [
 # returns 0 results for top-headlines with a country filter. /v2/everything
 # works reliably on the free tier and lets us pull global news per domain.
 CATEGORY_QUERIES = {
-    "world": "world OR global OR international",
+    "world": "world OR global OR international OR politics OR government OR conflict",
     "technology": "technology OR AI OR software",
     "business": "economy OR stock market OR business",
     "sports": "cricket OR football OR olympics OR tournament",
