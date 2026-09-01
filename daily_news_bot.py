@@ -41,13 +41,13 @@ SCOPES = [
 # returns 0 results for top-headlines with a country filter. /v2/everything
 # works reliably on the free tier and lets us pull global news per domain.
 CATEGORY_QUERIES = {
-    "world": "world news OR breaking news",
-    "technology": "technology OR AI OR startup",
-    "business": "business OR economy OR markets",
-    "sports": "sports OR football OR cricket",
-    "science": "science OR space OR research",
-    "health": "health OR medicine OR wellness",
-    "entertainment": "entertainment OR movies OR celebrity",
+    "world": "world OR global OR international",
+    "technology": "technology OR AI OR software",
+    "business": "economy OR stock market OR business",
+    "sports": "cricket OR football OR olympics OR tournament",
+    "science": "space OR NASA OR scientific discovery",
+    "health": "health OR disease OR medicine",
+    "entertainment": "movie OR celebrity OR box office",
 }
 
 # How many articles per category to include.
@@ -81,12 +81,13 @@ def get_all_subscribers():
 
 
 def fetch_category_news(category: str):
-    """Fetch recent articles for a single category from NewsAPI's /everything endpoint."""
+    """Fetch recent, relevant articles for a category from NewsAPI's /everything endpoint."""
     query = CATEGORY_QUERIES.get(category, category)
     params = {
         "q": query,
+        "searchIn": "title",     # only match articles whose TITLE contains the keyword (more relevant)
         "language": "en",
-        "sortBy": "publishedAt",
+        "sortBy": "relevancy",   # prioritize topical relevance over pure recency
         "pageSize": ARTICLES_PER_CATEGORY,
         "apiKey": NEWS_API_KEY,
     }
