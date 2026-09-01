@@ -92,8 +92,12 @@ def fetch_category_news(category: str):
     }
     try:
         response = requests.get(NEWS_API_URL, params=params, timeout=15)
-        response.raise_for_status()
         data = response.json()
+        status = data.get("status")
+        total = data.get("totalResults")
+        print(f"[{category}] HTTP {response.status_code} | status={status} | totalResults={total}")
+        if status != "ok":
+            print(f"[{category}] API message: {data.get('message')}")
         return data.get("articles", [])
     except requests.exceptions.RequestException as e:
         print(f"Error fetching {category} news: {e}")
