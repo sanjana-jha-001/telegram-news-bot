@@ -36,23 +36,34 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-# Country for headlines. 'in' = India. Change if you want a different country.
-COUNTRY = "in"
-
-# Categories to include in the daily digest.
-CATEGORIES = ["general", "technology", "business", "sports"]
+# Search keywords per category/domain. We use the /v2/everything endpoint
+# instead of /v2/top-headlines because NewsAPI's free "Developer" plan often
+# returns 0 results for top-headlines with a country filter. /v2/everything
+# works reliably on the free tier and lets us pull global news per domain.
+CATEGORY_QUERIES = {
+    "world": "world news OR breaking news",
+    "technology": "technology OR AI OR startup",
+    "business": "business OR economy OR markets",
+    "sports": "sports OR football OR cricket",
+    "science": "science OR space OR research",
+    "health": "health OR medicine OR wellness",
+    "entertainment": "entertainment OR movies OR celebrity",
+}
 
 # How many articles per category to include.
-ARTICLES_PER_CATEGORY = 4
+ARTICLES_PER_CATEGORY = 3
 
-NEWS_API_URL = "https://newsapi.org/v2/top-headlines"
+NEWS_API_URL = "https://newsapi.org/v2/everything"
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 
 CATEGORY_EMOJI = {
-    "general": "🗞️",
+    "world": "🌍",
     "technology": "💻",
     "business": "💼",
     "sports": "🏆",
+    "science": "🔬",
+    "health": "🩺",
+    "entertainment": "🎬",
 }
 
 
@@ -70,10 +81,12 @@ def get_all_subscribers():
 
 
 def fetch_category_news(category: str):
-    """Fetch top headlines for a single category from NewsAPI."""
+    """Fetch recent articles for a single category from NewsAPI's /everything endpoint."""
+    query = CATEGORY_QUERIES.get(category, category)
     params = {
-        "country": COUNTRY,
-        "category": category,
+        "q": query,
+        "language": "en",
+        "sortBy": "publishedAt",
         "pageSize": ARTICLES_PER_CATEGORY,
         "apiKey": NEWS_API_KEY,
     }
@@ -96,7 +109,7 @@ def build_digest_message():
 
     any_news_found = False
 
-    for category in CATEGORIES:
+    for category in CATEGORY_QUERIES:
         articles = fetch_category_news(category)
         if not articles:
             continue
