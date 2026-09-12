@@ -41,7 +41,8 @@ SCOPES = [
 # returns 0 results for top-headlines with a country filter. /v2/everything
 # works reliably on the free tier and lets us pull global news per domain.
 CATEGORY_QUERIES = {
-    "world": "world OR global OR international OR politics OR government OR conflict",
+    "india": "India OR Modi OR Delhi OR government OR Mumbai",
+    "world": "world OR global OR international OR politics OR conflict",
     "technology": "technology OR AI OR software",
     "business": "economy OR stock market OR business",
     "sports": "cricket OR football OR olympics OR tournament",
@@ -50,13 +51,36 @@ CATEGORY_QUERIES = {
     "entertainment": "movie OR celebrity OR box office",
 }
 
+# Restrict each category to a curated list of trusted, well-known news
+# sources instead of any random website. This greatly improves the
+# authenticity/quality of the headlines. (Comma-separated domains, no spaces.)
+INDIAN_TRUSTED_DOMAINS = (
+    "hindustantimes.com,timesofindia.indiatimes.com,ndtv.com,"
+    "thehindu.com,indianexpress.com"
+)
+GLOBAL_TRUSTED_DOMAINS = (
+    "bbc.co.uk,reuters.com,apnews.com,aljazeera.com,theguardian.com"
+)
+
+CATEGORY_DOMAINS = {
+    "india": INDIAN_TRUSTED_DOMAINS,
+    "world": GLOBAL_TRUSTED_DOMAINS,
+    "technology": "techcrunch.com,theverge.com,wired.com,arstechnica.com",
+    "business": "reuters.com,bloomberg.com,cnbc.com,businessinsider.com",
+    "sports": "espn.com,bbc.co.uk,skysports.com",
+    "science": "sciencedaily.com,nationalgeographic.com,bbc.co.uk",
+    "health": "who.int,webmd.com,bbc.co.uk,reuters.com",
+    "entertainment": "variety.com,hollywoodreporter.com,people.com,bbc.co.uk",
+}
+
 # How many articles per category to include.
-ARTICLES_PER_CATEGORY = 3
+ARTICLES_PER_CATEGORY = 4
 
 NEWS_API_URL = "https://newsapi.org/v2/everything"
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 
 CATEGORY_EMOJI = {
+    "india": "🇮🇳",
     "world": "🌍",
     "technology": "💻",
     "business": "💼",
@@ -81,14 +105,20 @@ def get_all_subscribers():
 
 
 def fetch_category_news(category: str):
-    """Fetch recent, relevant articles for a category from NewsAPI's /everything endpoint."""
+    """Fetch relevant articles published in the last 24 hours, from trusted
+    sources only, for a given category."""
+    from datetime import datetime, timedelta, timezone
+
     query = CATEGORY_QUERIES.get(category, category)
+    since = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
+
     params = {
         "q": query,
-        "searchIn": "title",     # only match articles whose TITLE contains the keyword (more relevant)
+        "domains": CATEGORY_DOMAINS.get(category, ""),  # only trusted/authentic sources
         "language": "en",
-        "sortBy": "relevancy",   # prioritize topical relevance over pure recency
-        "pageSize": ARTICLES_PER_CATEGORY,
+        "from": since,           # only articles from the last 24 hours (avoids repeating old news)
+        "sortBy": "publishedAt", # freshest first within that window
+        "pageSize": ARTICLES_PER_CATEGORY + 3,  # fetch a few extra so we can drop duplicates later
         "apiKey": NEWS_API_KEY,
     }
     try:
@@ -113,17 +143,31 @@ def build_digest_message():
     lines = [f"📅 *Daily News Digest — {today}*\n"]
 
     any_news_found = False
+    seen_urls = set()  # tracks articles already used, so no article repeats across categories
 
     for category in CATEGORY_QUERIES:
         articles = fetch_category_news(category)
         if not articles:
             continue
 
+        # Drop articles we've already shown in an earlier category this run.
+        unique_articles = []
+        for article in articles:
+            url = article.get("url", "")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                unique_articles.append(article)
+            if len(unique_articles) >= ARTICLES_PER_CATEGORY:
+                break
+
+        if not unique_articles:
+            continue
+
         any_news_found = True
         emoji = CATEGORY_EMOJI.get(category, "📰")
         lines.append(f"\n{emoji} *{category.upper()}*")
 
-        for article in articles:
+        for article in unique_articles:
             title = article.get("title", "").split(" - ")[0].strip()
             url = article.get("url", "")
             if title:
