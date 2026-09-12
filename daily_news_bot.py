@@ -1,13 +1,15 @@
 """
-Daily News Telegram Bot (Multi-User)
---------------------------------------
-Fetches top headlines across multiple categories (general, technology,
-business, sports) using NewsAPI.org and sends a formatted digest message
-to EVERY subscriber saved in the Google Sheet.
+Daily News Telegram Bot (Multi-User, RSS-based)
+--------------------------------------------------
+Fetches fresh headlines directly from trusted news outlets' official RSS
+feeds (Hindustan Times, NDTV, BBC, Reuters, TechCrunch, ESPN, etc.) and
+sends a formatted digest to EVERY subscriber saved in the Google Sheet.
+
+No third-party news API, no API key, no daily quota limits — just the
+publishers' own public RSS feeds.
 
 Required environment variables (set as GitHub Actions secrets):
     TELEGRAM_BOT_TOKEN      -> token from @BotFather
-    NEWS_API_KEY            -> API key from https://newsapi.org
     GOOGLE_CREDENTIALS_JSON -> full content of your service account JSON,
                                pasted as a single-line string
     SHEET_NAME              -> name of your Google Sheet
@@ -22,12 +24,12 @@ import sys
 import json
 import time
 import requests
+import feedparser
 import gspread
 from google.oauth2.service_account import Credentials
 
 # ---------- Configuration ----------
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
 GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON")
 SHEET_NAME = os.environ.get("SHEET_NAME", "news bot subscribers spreadsheet")
 
@@ -36,47 +38,44 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-# Search keywords per category/domain. We use the /v2/everything endpoint
-# instead of /v2/top-headlines because NewsAPI's free "Developer" plan often
-# returns 0 results for top-headlines with a country filter. /v2/everything
-# works reliably on the free tier and lets us pull global news per domain.
-CATEGORY_QUERIES = {
-    "india": "India OR Modi OR Delhi OR government OR Mumbai",
-    "world": "world OR global OR international OR politics OR conflict",
-    "technology": "technology OR AI OR software",
-    "business": "economy OR stock market OR business",
-    "sports": "cricket OR football OR olympics OR tournament",
-    "science": "space OR NASA OR scientific discovery",
-    "health": "health OR disease OR medicine",
-    "entertainment": "movie OR celebrity OR box office",
+# Official RSS feeds per category/domain, from trusted, well-known outlets.
+CATEGORY_FEEDS = {
+    "india": [
+        "https://www.hindustantimes.com/feeds/rss/india-news/rssfeed.xml",
+        "https://timesofindia.indiatimes.com/rssfeeds/296589292.cms",
+        "https://feeds.feedburner.com/ndtvnews-india-news",
+    ],
+    "world": [
+        "http://feeds.bbci.co.uk/news/world/rss.xml",
+        "https://feeds.feedburner.com/ndtvnews-world-news",
+    ],
+    "technology": [
+        "http://feeds.bbci.co.uk/news/technology/rss.xml",
+        "https://techcrunch.com/feed/",
+    ],
+    "business": [
+        "http://feeds.bbci.co.uk/news/business/rss.xml",
+        "https://www.hindustantimes.com/feeds/rss/business/rssfeed.xml",
+    ],
+    "sports": [
+        "http://feeds.bbci.co.uk/sport/rss.xml",
+        "https://www.hindustantimes.com/feeds/rss/cricket/rssfeed.xml",
+    ],
+    "science": [
+        "http://feeds.bbci.co.uk/news/science_and_environment/rss.xml",
+    ],
+    "health": [
+        "http://feeds.bbci.co.uk/news/health/rss.xml",
+    ],
+    "entertainment": [
+        "http://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml",
+        "https://www.hindustantimes.com/feeds/rss/entertainment/rssfeed.xml",
+    ],
 }
 
-# Restrict each category to a curated list of trusted, well-known news
-# sources instead of any random website. This greatly improves the
-# authenticity/quality of the headlines. (Comma-separated domains, no spaces.)
-INDIAN_TRUSTED_DOMAINS = (
-    "hindustantimes.com,timesofindia.indiatimes.com,ndtv.com,"
-    "thehindu.com,indianexpress.com"
-)
-GLOBAL_TRUSTED_DOMAINS = (
-    "bbc.co.uk,reuters.com,apnews.com,aljazeera.com,theguardian.com"
-)
-
-CATEGORY_DOMAINS = {
-    "india": INDIAN_TRUSTED_DOMAINS,
-    "world": GLOBAL_TRUSTED_DOMAINS,
-    "technology": "techcrunch.com,theverge.com,wired.com,arstechnica.com",
-    "business": "reuters.com,bloomberg.com,cnbc.com,businessinsider.com",
-    "sports": "espn.com,bbc.co.uk,skysports.com",
-    "science": "sciencedaily.com,nationalgeographic.com,bbc.co.uk",
-    "health": "who.int,webmd.com,bbc.co.uk,reuters.com",
-    "entertainment": "variety.com,hollywoodreporter.com,people.com,bbc.co.uk",
-}
-
-# How many articles per category to include.
+# How many articles per category to include in the final digest.
 ARTICLES_PER_CATEGORY = 4
 
-NEWS_API_URL = "https://newsapi.org/v2/everything"
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 
 CATEGORY_EMOJI = {
@@ -99,40 +98,29 @@ def get_all_subscribers():
     sheet = client.open(SHEET_NAME).sheet1
 
     all_rows = sheet.get_all_values()
-    # Skip the header row (row 1), take column A (Chat_ID) from every other row.
     chat_ids = [row[0] for row in all_rows[1:] if row and row[0].strip()]
     return chat_ids
 
 
 def fetch_category_news(category: str):
-    """Fetch relevant articles published in the last 24 hours, from trusted
-    sources only, for a given category."""
-    from datetime import datetime, timedelta, timezone
+    """Fetch the latest entries from every RSS feed configured for a category."""
+    feeds = CATEGORY_FEEDS.get(category, [])
+    articles = []
 
-    query = CATEGORY_QUERIES.get(category, category)
-    since = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
+    for feed_url in feeds:
+        try:
+            parsed = feedparser.parse(feed_url)
+            entries = parsed.entries[:ARTICLES_PER_CATEGORY + 3]
+            print(f"[{category}] {feed_url} -> {len(entries)} entries")
+            for entry in entries:
+                title = getattr(entry, "title", "").strip()
+                link = getattr(entry, "link", "").strip()
+                if title and link:
+                    articles.append({"title": title, "url": link})
+        except Exception as e:
+            print(f"[{category}] Error fetching {feed_url}: {e}")
 
-    params = {
-        "q": query,
-        "domains": CATEGORY_DOMAINS.get(category, ""),  # only trusted/authentic sources
-        "language": "en",
-        "from": since,           # only articles from the last 24 hours (avoids repeating old news)
-        "sortBy": "publishedAt", # freshest first within that window
-        "pageSize": ARTICLES_PER_CATEGORY + 3,  # fetch a few extra so we can drop duplicates later
-        "apiKey": NEWS_API_KEY,
-    }
-    try:
-        response = requests.get(NEWS_API_URL, params=params, timeout=15)
-        data = response.json()
-        status = data.get("status")
-        total = data.get("totalResults")
-        print(f"[{category}] HTTP {response.status_code} | status={status} | totalResults={total}")
-        if status != "ok":
-            print(f"[{category}] API message: {data.get('message')}")
-        return data.get("articles", [])
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching {category} news: {e}")
-        return []
+    return articles
 
 
 def build_digest_message():
@@ -145,15 +133,14 @@ def build_digest_message():
     any_news_found = False
     seen_urls = set()  # tracks articles already used, so no article repeats across categories
 
-    for category in CATEGORY_QUERIES:
+    for category in CATEGORY_FEEDS:
         articles = fetch_category_news(category)
         if not articles:
             continue
 
-        # Drop articles we've already shown in an earlier category this run.
         unique_articles = []
         for article in articles:
-            url = article.get("url", "")
+            url = article["url"]
             if url and url not in seen_urls:
                 seen_urls.add(url)
                 unique_articles.append(article)
@@ -168,13 +155,13 @@ def build_digest_message():
         lines.append(f"\n{emoji} *{category.upper()}*")
 
         for article in unique_articles:
-            title = article.get("title", "").split(" - ")[0].strip()
-            url = article.get("url", "")
+            title = article["title"].split(" - ")[0].strip()
+            url = article["url"]
             if title:
                 lines.append(f"• [{title}]({url})")
 
     if not any_news_found:
-        lines.append("\nNo news available right now. Please check your API key or quota.")
+        lines.append("\nNo news available right now. Please try again later.")
 
     return "\n".join(lines)
 
@@ -220,7 +207,6 @@ def split_message_by_lines(message: str, max_len: int = 3500):
     current = ""
 
     for line in lines:
-        # +1 accounts for the newline that will join this line to current
         if len(current) + len(line) + 1 > max_len and current:
             chunks.append(current)
             current = line
@@ -238,7 +224,6 @@ def main():
         name
         for name, val in [
             ("TELEGRAM_BOT_TOKEN", TELEGRAM_BOT_TOKEN),
-            ("NEWS_API_KEY", NEWS_API_KEY),
             ("GOOGLE_CREDENTIALS_JSON", GOOGLE_CREDENTIALS_JSON),
         ]
         if not val
